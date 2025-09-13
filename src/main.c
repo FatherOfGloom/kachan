@@ -90,20 +90,22 @@ typedef struct Layout {
 
 Vector2 layout_available_position(Layout* layout) {
     Vector2 padding = (Vector2) { .x = layout->padding, .y = layout->padding };
-    Vector2 shifted = v2_add(layout->position, v2_add(layout->size, padding));
+    Vector2 padded_position = v2_add(layout->size, padding);
 
     switch (layout->orientation) {
         case ORIENTATION_HORIZONTAL:
-            shifted.y = 0.0;
+            padded_position.y = 0.0;
             break;
         case ORIENTATION_VERTICAL:
-            shifted.x = 0.0;
+            padded_position.x = 0.0;
             break;
         default:
             panic("");
     }
 
-    return shifted;
+    Vector2 shifted_position = v2_add(layout->position, padded_position);
+
+    return shifted_position;
 } 
 
 // TODO: make typesafe
