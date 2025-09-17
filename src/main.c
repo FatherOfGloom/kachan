@@ -32,8 +32,12 @@ typedef Vector2 V2;
 #define kassert assert
 
 #define panic(...) do { fprintf(stderr,  __VA_ARGS__); exit(0); } while (0)
-#define nonnull(this) ({ void* _ptr = (this); if (!_ptr) { panic("f:%s l:%d ERR: %s\n", __FILE__, __LINE__, "unwrap on a null value."); } _ptr; })
-#define unwrap(this) ({ size_t _this = (this); if (!_this) panic("f:%s l:%d ERR: %s\n", __FILE__, __LINE__, "unwrap failed."); _this; })
+#define nonnull(this) __extension__ ({ void* _ptr = (this); if (!_ptr) { panic("f:%s l:%d ERR: %s\n", __FILE__, __LINE__, "unwrap on a null value."); } _ptr; })
+#define unwrap(this) __extension__ ({ size_t _this = (this); if (!_this) panic("f:%s l:%d ERR: %s\n", __FILE__, __LINE__, "unwrap failed."); _this; })
+
+#define v2_add(v1, v2) ((V2) { .x = (v1).x + (v2).x, .y = (v1).y + (v2).y, })
+
+#define max(a, b) __extension__ ({ __typeof__ (a) _a = (a);  __typeof__ (b) _b = (b); _a > _b ? _a : _b; })
 
 #define WINDOW_HEIGHT 600 
 #define WINDOW_WIDTH 800
@@ -44,40 +48,6 @@ typedef Vector2 V2;
 typedef struct Context {
     Vector2 mouse_pos;
 } Context;
-
-typedef enum {
-    UI_STATE_DEFAULT = 0,
-    UI_STATE_ACTIVE,
-    UI_STATE_HOVER,
-} UIState;
-
-// typedef struct StrSlice {
-//     const char* ptr;
-//     u64 len;
-// } StrSlice;
-
-// typedef struct Button {
-//     StrSlice label;
-// } Button;
-
-// StrSlice strslice_from(const char* cstr) {
-//     return (StrSlice){.ptr = cstr, .len = (u64)strlen(cstr)};
-// }
-
-typedef enum {
-    COMPONENT_KIND_LAYOUT = 0,
-    COMPONENT_KIND_RECT,
-} UIComponentKind; 
-
-// typedef struct UIComponent {
-//     UIState state;
-//     union variant { Button button; Layout layout; };
-//     UIComponentKind kind;
-//     u32 x;
-//     u32 y;
-//     u32 w;
-//     u32 h;
-// } UIComponent;
 
 typedef enum {
     RENDER_COMMAND_NONE = 0,
@@ -99,11 +69,12 @@ typedef struct RenderCommand {
 } RenderCommand;
 
 RenderCommand render_rect(V2 pos, u32 w, u32 h, Color color) {
-    return (RenderCommand){
+    return (RenderCommand) {
         .variant = {
             .rect = {.pos = pos, .w = w, .h = h, .color = color},
         }, 
-        .kind = RENDER_COMMAND_RECT};
+        .kind = RENDER_COMMAND_RECT
+    };
 }
 
 typedef struct RenderCommands {
@@ -127,8 +98,6 @@ typedef struct Layout {
     V2 size;
 } Layout;
 
-#define v2_add(v1, v2) ((V2) { .x = (v1).x + (v2).x, .y = (v1).y + (v2).y, })
-
 Vector2 layout_available_position(Layout* layout) {
     Vector2 padding = (Vector2) { .x = layout->padding, .y = layout->padding };
     Vector2 padded_position = v2_add(layout->size, padding);
@@ -149,32 +118,29 @@ Vector2 layout_available_position(Layout* layout) {
     return shifted_position;
 } 
 
-// TODO: make typesafe
-#define maxf(a, b) ((a) > (b) ? (a) : (b))
-
 void layout_inflate(Layout* layout, V2 size) {
     switch (layout->orientation) {
         case ORIENTATION_HORIZONTAL:
             layout->size.x += size.x + layout->padding;
-            layout->size.y = maxf(size.y, layout->padding);
+            layout->size.y = max(size.y, layout->padding);
             break;
         case ORIENTATION_VERTICAL:
-            layout->size.x = maxf(size.x, layout->size.x);
+            layout->size.x = max(size.x, layout->size.x);
             layout->size.y += size.y + layout->padding;
             break;
-        defaut:
+        default:
             panic("unreachable");
     }
 }
-
-#define LAYOUT_MAX_CAP 256
-#define RENDER_COMMANDS_MAX_CAP 256
 
 typedef struct UIRect {
     Color color;
     usize w;
     usize h;
 } UIRect;
+
+#define LAYOUT_MAX_CAP 256
+#define RENDER_COMMANDS_MAX_CAP 256
 
 typedef struct UI {
     // TODO: dynamic
@@ -194,7 +160,7 @@ Layout ui_layout_pop(UI* ui) {
     return ui->layouts[ui->layout_count--];
 }
 
-Layout* ui_layout_last(UI* ui) {
+Layout* ui_layout_parent(UI* ui) {
     return ui->layout_count > 0 ? &ui->layouts[ui->layout_count - 1] : NULL;
 }
 
@@ -209,7 +175,7 @@ void ui_begin(UI* ui, V2 position) {
 }
 
 void ui_layout_begin(UI* ui, Layout child) {
-    Layout* parent = nonnull(ui_layout_last(ui));
+    Layout* parent = nonnull(ui_layout_parent(ui));
     child.position = layout_available_position(parent);
     child.size = (V2){0};
     ui_layout_push(ui, child);
@@ -217,7 +183,7 @@ void ui_layout_begin(UI* ui, Layout child) {
 
 void ui_layout_end(UI* ui) {
     Layout child = ui_layout_pop(ui);
-    Layout* parent = nonnull(ui_layout_last(ui));
+    Layout* parent = nonnull(ui_layout_parent(ui));
     layout_inflate(parent, child.size);
 }
 
@@ -228,7 +194,7 @@ void ui_render_widget(UI* ui, RenderCommand render_command) {
 }
 
 void ui_rect(UI* ui, UIRect rect) { 
-    Layout* parent = nonnull(ui_layout_last(ui));
+    Layout* parent = nonnull(ui_layout_parent(ui));
     Vector2 position = layout_available_position(parent);
     layout_inflate(parent, (Vector2) { .x = rect.w, .y = rect.h });
 
@@ -284,10 +250,13 @@ void app_render(Context* ctx, RenderCommands* render_commands) {
         RenderCommand command = render_commands->items[i]; 
 
         switch (command.kind) {
-            case RENDER_COMMAND_RECT:
-            RenderCommandRect rect = command.variant.rect;
-            DrawRectangle(rect.pos.x, rect.pos.y, rect.w, rect.h, rect.color);
-            break;
+            case RENDER_COMMAND_RECT: {
+                RenderCommandRect rect = command.variant.rect;
+                DrawRectangle(rect.pos.x, rect.pos.y, rect.w, rect.h, rect.color);
+                break;
+            }
+            default:
+                break;
         }
     }
 
@@ -298,10 +267,10 @@ void app_render(Context* ctx, RenderCommands* render_commands) {
 }
 
 // TODO: add fix naming and remove unused code/comments
-// TODO: rename _last to _parent
 // TODO: implement widget id hashing
 // TODO: implement is_hover(id)
-// TODO: implement a ui arena
+// TODO: implement a ui arena allocator for dynamic buffers
+// TODO: make id_hashing static in the long run
 int main(void) {
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "KACHAN");
     SetTargetFPS(60);
