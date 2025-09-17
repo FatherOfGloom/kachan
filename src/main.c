@@ -3,6 +3,7 @@
 #include <assert.h>
 
 #define KDEBUG
+#define KRENDERER_RAYLIB
 
 #define __i64 long long
 
@@ -22,7 +23,11 @@ typedef float f32;
 
 typedef size_t usize;
 
+#ifdef KRENDERER_RAYLIB
 typedef Vector2 V2;
+#else
+  #error "Unimplemented renderer"
+#endif  // KRENDERER_RAYLIB
 
 #define kassert assert
 
@@ -75,6 +80,42 @@ typedef enum {
 // } UIComponent;
 
 typedef enum {
+    RENDER_COMMAND_NONE = 0,
+    RENDER_COMMAND_RECT,
+} RenderCommandKind;
+
+typedef struct RenderCommandRect {
+    V2 pos;
+    u32 w;
+    u32 h;
+    Color color;
+} RenderCommandRect;
+
+typedef struct RenderCommand {
+    union {
+        RenderCommandRect rect;
+    } variant;
+    RenderCommandKind kind;
+} RenderCommand;
+
+RenderCommand render_rect(V2 pos, u32 w, u32 h, Color color) {
+    return (RenderCommand){
+        .variant = {
+            .rect = {.pos = pos, .w = w, .h = h, .color = color},
+        }, 
+        .kind = RENDER_COMMAND_RECT};
+}
+
+typedef struct RenderCommands {
+    RenderCommand* items;
+    usize len;
+} RenderCommands;
+
+static inline RenderCommands render_commands_new(RenderCommand* items, usize len) {
+    return (RenderCommands){.items = items, .len = len};
+}
+
+typedef enum {
     ORIENTATION_HORIZONTAL = 0,
     ORIENTATION_VERTICAL,
 } LayoutOrientation;
@@ -100,7 +141,7 @@ Vector2 layout_available_position(Layout* layout) {
             padded_position.x = 0.0;
             break;
         default:
-            panic("");
+            panic("unreachable");
     }
 
     Vector2 shifted_position = v2_add(layout->position, padded_position);
@@ -122,17 +163,12 @@ void layout_inflate(Layout* layout, V2 size) {
             layout->size.y += size.y + layout->padding;
             break;
         defaut:
-            panic("");
+            panic("unreachable");
     }
 }
 
 #define LAYOUT_MAX_CAP 256
-
-typedef struct UI {
-    // TODO: dynamic
-    Layout layouts[LAYOUT_MAX_CAP];
-    usize layout_count;
-} UI;
+#define RENDER_COMMANDS_MAX_CAP 256
 
 typedef struct UIRect {
     Color color;
@@ -140,10 +176,13 @@ typedef struct UIRect {
     usize h;
 } UIRect;
 
-typedef struct AppState {
-    UI ui;
-    Context ctx;
-} AppState;
+typedef struct UI {
+    // TODO: dynamic
+    Layout layouts[LAYOUT_MAX_CAP];
+    RenderCommand render_commands[RENDER_COMMANDS_MAX_CAP];
+    usize render_commands_count;
+    usize layout_count;
+} UI;
 
 void ui_layout_push(UI* ui, Layout layout) {
     kassert(ui->layout_count < LAYOUT_MAX_CAP);
@@ -160,6 +199,8 @@ Layout* ui_layout_last(UI* ui) {
 }
 
 void ui_begin(UI* ui, V2 position) {
+    ui->render_commands_count = 0;
+
     ui_layout_push(ui, (Layout) {
         .orientation = ORIENTATION_HORIZONTAL, 
         .padding = 0.0, 
@@ -182,11 +223,33 @@ void ui_layout_end(UI* ui) {
 
 void ui_end(UI* ui) { ui_layout_pop(ui); }
 
+void ui_render_widget(UI* ui, RenderCommand render_command) {
+    ui->render_commands[ui->render_commands_count++] = render_command;
+}
+
 void ui_rect(UI* ui, UIRect rect) { 
     Layout* parent = nonnull(ui_layout_last(ui));
     Vector2 position = layout_available_position(parent);
     layout_inflate(parent, (Vector2) { .x = rect.w, .y = rect.h });
-    DrawRectangle(position.x, position.y, rect.w, rect.h, rect.color);
+
+    // DrawRectangle(position.x, position.y, rect.w, rect.h, rect.color);
+    ui_render_widget(ui, render_rect(position, rect.w, rect.h, rect.color));
+}
+
+RenderCommands ui_render(UI* ui) {
+    ui_begin(ui, (V2){10, 10});
+    {
+        ui_layout_begin(ui, (Layout){.orientation = ORIENTATION_VERTICAL, .padding = 10.0});
+        {
+            ui_rect(ui, (UIRect){.color = RED, .w = 100, .h = 100});
+            ui_rect(ui, (UIRect){.color = GREEN, .w = 100, .h = 100});
+            ui_rect(ui, (UIRect){.color = WHITE, .w = 75, .h = 100});
+        }
+        ui_layout_end(ui);
+    }
+    ui_end(ui);
+
+    return render_commands_new(ui->render_commands, ui->render_commands_count); 
 }
 
 #ifdef KDEBUG
@@ -205,34 +268,40 @@ static inline void draw_debug_info(Context* ctx) {
 }
 #endif  // KDEBUG
 
-static inline void update_context(Context* ctx) {
-    ctx->mouse_pos = GetMousePosition();
+typedef struct AppState {
+    UI ui;
+    Context ctx;
+} AppState;
+
+static inline void app_update_state(AppState* state) {
+    state->ctx.mouse_pos = GetMousePosition();
 }
 
-void app_update_state(AppState* state) {
-    update_context(&state->ctx);
-}
-
-void app_render(AppState* state) {
-    UI* ui = &state->ui;
+void app_render(Context* ctx, RenderCommands* render_commands) {
     ClearBackground(KGRAY);
 
-    ui_begin(ui, (V2){10, 10});
-    ui_layout_begin(ui, (Layout){.orientation = ORIENTATION_HORIZONTAL, .padding = 5.0});
-    {
-        ui_rect(ui, (UIRect){.color = RED, .w = 100, .h = 100});
-        ui_rect(ui, (UIRect){.color = GREEN, .w = 100, .h = 100});
-        ui_rect(ui, (UIRect){.color = WHITE, .w = 75, .h = 100});
+    for (u32 i = 0; i < render_commands->len; ++i) {
+        RenderCommand command = render_commands->items[i]; 
+
+        switch (command.kind) {
+            case RENDER_COMMAND_RECT:
+            RenderCommandRect rect = command.variant.rect;
+            DrawRectangle(rect.pos.x, rect.pos.y, rect.w, rect.h, rect.color);
+            break;
+        }
     }
-    ui_layout_end(ui);
-    ui_end(ui);
 
 #ifdef KDEBUG
     if (IsKeyPressed(KEY_D)) { toggle_debug_info(); }; 
-    if (is_debug_mode_ui) { draw_debug_info(&state->ctx); };
+    if (is_debug_mode_ui) { draw_debug_info(ctx); };
 #endif  // KDEBUG
 }
 
+// TODO: add fix naming and remove unused code/comments
+// TODO: rename _last to _parent
+// TODO: implement widget id hashing
+// TODO: implement is_hover(id)
+// TODO: implement a ui arena
 int main(void) {
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "KACHAN");
     SetTargetFPS(60);
@@ -242,8 +311,9 @@ int main(void) {
 
     while (!WindowShouldClose()) {
         app_update_state(&state);
+        RenderCommands commands = ui_render(&state.ui);
         BeginDrawing();
-        app_render(&state);
+        app_render(&state.ctx, &commands);
         EndDrawing();
     }
     
